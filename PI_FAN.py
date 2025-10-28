@@ -1,24 +1,45 @@
 import socket
-import RPi.GPIO as GPIO
+import pigpio
+import sys
+import signal
 
 # =============================
-# GPIO 설정
+# 설정
 # =============================
-PWM_PIN = 21           # 팬 제어용 핀 (BCM 기준)
-FREQ_HZ = 25000        # PWM 주파수 (25kHz 권장, 팬에 맞게 조정)
-
-GPIO.setmode(GPIO.BCM)
-GPIO.setup(PWM_PIN, GPIO.OUT)
-pwm = GPIO.PWM(PWM_PIN, FREQ_HZ)
-pwm.start(0)  # 시작 시 0% Duty
-
-# =============================
-# TCP 서버 설정
-# =============================
+PWM_PIN = 21        # BCM 기준, 고정
+FREQ_HZ = 25000     # 25kHz (팬에 적합)
 HOST = "0.0.0.0"
 PORT = 7000
 
-print(f"[PI] Fan controller listening on {HOST}:{PORT}")
+# =============================
+# pigpio 초기화
+# =============================
+pi = pigpio.pi()
+if not pi.connected:
+    print("[PI] pigpio 데몬 연결 실패. 'sudo systemctl start pigpiod' 확인하세요.", file=sys.stderr)
+    sys.exit(1)
+
+pi.set_mode(PWM_PIN, pigpio.OUTPUT)
+pi.set_PWM_frequency(PWM_PIN, FREQ_HZ)
+pi.set_PWM_range(PWM_PIN, 255)
+pi.set_PWM_dutycycle(PWM_PIN, 0)
+
+# =============================
+# 안전 종료 핸들러
+# =============================
+def cleanup(*_):
+    pi.set_PWM_dutycycle(PWM_PIN, 0)
+    pi.stop()
+    print("\n[PI] GPIO21 PWM 종료 및 정리 완료.")
+    sys.exit(0)
+
+signal.signal(signal.SIGINT, cleanup)
+signal.signal(signal.SIGTERM, cleanup)
+
+# =============================
+# TCP 서버
+# =============================
+print(f"[PI] Fan controller (GPIO21, {FREQ_HZ}Hz) listening on {HOST}:{PORT}")
 
 try:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
@@ -35,28 +56,18 @@ try:
                     line = line.strip()
                     if not line:
                         continue
-
                     try:
-                        # 문자열 → 정수 (0~255)
                         val = int(line)
                         val = max(0, min(255, val))
-
-                        # 0~255 → 0~100%로 변환
-                        duty = val * 100.0 / 255.0
-                        pwm.ChangeDutyCycle(duty)
-
-                        print(f"[PI] PWM={val} (Duty={duty:.1f}%)")
-
+                        pi.set_PWM_dutycycle(PWM_PIN, val)
+                        print(f"[PI] PWM={val} (Duty={val/255*100:.1f}%)")
                     except ValueError:
                         print(f"[PI] Invalid data received: {line}")
                     except Exception as e:
                         print(f"[PI] Error: {e}")
-                        pwm.ChangeDutyCycle(0)
-
+                        pi.set_PWM_dutycycle(PWM_PIN, 0)
 except KeyboardInterrupt:
-    print("\n[PI] Interrupted by user. Stopping fan...")
-finally:
-    pwm.ChangeDutyCycle(0)
-    pwm.stop()
-    GPIO.cleanup()
-    print("[PI] GPIO cleaned up. Bye!")
+    cleanup()
+except Exception as e:
+    print(f"[PI] Fatal error: {e}", file=sys.stderr)
+    cleanup()
