@@ -57,6 +57,7 @@ class FanController:
         f_gpu = clamp(gpu_temp / 60.0, 0.0, 1.0)
         f_model = 1.0 if model_result > 0 else 0.0
         pwm = (35.0 + 88.0 * max(f_cpu, f_gpu) * f_model)
+        print(pwm)
         return int(round(clamp(pwm, 0.0, 100.0)))
 
     def step(self, cpu_temp: float, gpu_temp: float, model_result: int) -> int:
@@ -144,5 +145,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
