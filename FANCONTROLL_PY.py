@@ -86,18 +86,12 @@ class FanController:
         return int(round(self.step(cpu_temp, gpu_temp, model_result) * 255.0 / 100.0))
 
 def calculate_pwm_direct(cpu_temp: float, gpu_temp: float, model_result: int) -> int:
-    """
-    주어진 식 그대로 적용:
-      f_cpu = cpu_temp / 60
-      f_gpu = gpu_temp / 60
-      f_model = 0 or 1
-      pwm = 40 + (88 * max(f_cpu, f_gpu) * f_model)
-    """
+
     f_cpu = max(0.0, min(cpu_temp / 60.0, 1.0))
     f_gpu = max(0.0, min(gpu_temp / 60.0, 1.0))
     f_model = 1.0 if model_result > 0 else 0.0
 
-    pwm = 40.0 + (88.0 * max(f_cpu, f_gpu)) * f_model)
+    pwm = 40.0 + (88.0 * max(f_cpu, f_gpu) * f_model)
     pwm = max(0.0, min(pwm, 100.0))  # 0~100% 제한
     pwm_255 = int(round(pwm * 255.0 / 100.0))  # 0~255 변환
     return pwm_255
@@ -161,6 +155,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
