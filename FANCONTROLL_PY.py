@@ -31,25 +31,14 @@ lock = threading.Lock()
 
 
 def _flux_body_union_pivot():
-    """
-    세 measurement의 'value' 필드를 한 번에 가져오고,
-    measurement명을 컬럼으로 pivot → 한 줄(dict)로 파싱하기 쉽게 만듦.
-    """
+"""특정 measurement의 value 필드에서 last() 1개를 CSV로 받아 파싱"""
     flux = f'''
 from(bucket: "{INFLUX_BUCKET}")
   |> range(start: -24h)
-  |> filter(fn: (r) =>
-      (r._measurement == "{MEASUREMENT_CPU}" or
-       r._measurement == "{MEASUREMENT_GPU}" or
-       r._measurement == "{MEASUREMENT_MDL}") and
-      r._field == "{FIELD_NAME}"
-  )
-  |> group(columns: ["_measurement"])
+  |> filter(fn: (r) => r._measurement == "{measurement}" and r._field == "{FIELD_NAME}")
   |> last()
-  |> pivot(rowKey: ["_time"], columnKey: ["_measurement"], valueColumn: "_value")
-  |> keep(columns: ["_time","{MEASUREMENT_CPU}","{MEASUREMENT_GPU}","{MEASUREMENT_MDL}"])
 '''
-    return {
+    body = {
         "query": flux,
         "type": "flux",
         "dialect": {
@@ -58,52 +47,47 @@ from(bucket: "{INFLUX_BUCKET}")
             "delimiter": ","
         }
     }
-
-
-def fetch_latest_from_influx():
-    """
-    CSV로 응답을 받아 pivot된 컬럼을 파싱.
-    컬럼명:
-      - cpu_temperature
-      - gpu_temperature
-      - model_result
-    """
     headers = {
         "Authorization": f"Token {INFLUXDB_TOKEN}",
         "Content-Type": "application/json",
         "Accept": "application/csv"
     }
-    try:
-        resp = requests.post(INFLUXDB_QUERY_URL, headers=headers, json=_flux_body_union_pivot(), timeout=10)
-        if resp.status_code != 200:
-            print(f"[DB] HTTP {resp.status_code}  body: {resp.text[:300]}")
-            return None
+    resp = requests.post(INFLUXDB_QUERY_URL, headers=headers, json=body, timeout=10)
+    if resp.status_code != 200:
+        # 문제 원인 바로 보이게 로그
+        print(f"[DB] {measurement} HTTP {resp.status_code} body: {resp.text[:300]}")
+        return {"ok": False, "value": None}
+    f = StringIO(resp.text)
+    reader = csv.DictReader(f)
+    for row in reader:
+        # 첫 레코드의 _value 반환
+        v = row.get("_value")
+        if v is None or v == "":
+            continue
+        return {"ok": True, "value": v}
+    return {"ok": True, "value": None}  # 데이터 없음
 
-        f = StringIO(resp.text)
-        reader = csv.DictReader(f)
-        for row in reader:
-            # 한 줄만 있으면 반환
-            def to_float(x):
-                try: return float(x)
-                except: return 0.0
-            def to_int(x):
-                try: return int(float(x))
-                except: return 0
+def fetch_latest_from_influx():
+    cpu_r = _flux_last_for(MEASUREMENT_CPU)
+    gpu_r = _flux_last_for(MEASUREMENT_GPU)
+    mdl_r = _flux_last_for(MEASUREMENT_MDL)
 
-            cpu   = to_float(row.get(MEASUREMENT_CPU))
-            gpu   = to_float(row.get(MEASUREMENT_GPU))
-            model = to_int(row.get(MEASUREMENT_MDL))
-            return {"cpu_temp": cpu, "gpu_temp": gpu, "model_result": model}
+    # 파싱 (없으면 0)
+    try: cpu = float(cpu_r["value"]) if cpu_r["value"] is not None else 0.0
+    except: cpu = 0.0
+    try: gpu = float(gpu_r["value"]) if gpu_r["value"] is not None else 0.0
+    except: gpu = 0.0
+    try: model = int(float(mdl_r["value"])) if mdl_r["value"] is not None else 0
+    except: model = 0
 
-        print("[DB] pivot 결과가 비어 있음")
+    # 세 값이 전부 None/0으로만 나오는지 확인해 보고 싶다면 여기에 디버그 프린트 추가 가능
+    # print("[DBG]", cpu_r, gpu_r, mdl_r)
+
+    # 최소 하나라도 들어왔으면 dict 반환
+    if cpu_r["value"] is None and gpu_r["value"] is None and mdl_r["value"] is None:
+        print("[DB] 최근 데이터가 없습니다 (세 measurement 모두 last() 결과 없음)")
         return None
-
-    except requests.RequestException as e:
-        print(f"[DB] 요청 예외: {e}")
-        return None
-    except Exception as e:
-        print(f"[DB] 파싱 예외: {e}")
-        return None
+    return {"cpu_temp": cpu, "gpu_temp": gpu, "model_result": model}
 
 
 def calculate_pwm(cpu_temp, gpu_temp, model_result):
@@ -207,3 +191,4 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT,  lambda *_: stop_event.set())
     signal.signal(signal.SIGTERM, lambda *_: stop_event.set())
     main()
+
