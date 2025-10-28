@@ -1,264 +1,146 @@
-import time, json, socket, signal, sys, threading, requests, csv
-from io import StringIO
-from contextlib import closing
+import os
+import time
+import json
+import socket
+import csv
+import io
+from dataclasses import dataclass
+import requests
 
-# InfluxDB 2.x "읽기(쿼리)" 엔드포인트 (풀 URL)
-INFLUXDB_QUERY_URL = "http://localhost:8086/api/v2/query?org=HANBAT"
-INFLUXDB_TOKEN     = "RCT4a8V-f35ri3UYcz5Z3-KfHhTGInyE8PJVLMpmzRT96E6KcpFgbzJ5H5S6p-9qhVUb_tS4BHAvLRBOaKW7-g=="   # 토큰 필수(로컬이어도 2.x는 기본 인증 필요)
+# =========================
+# 0) 환경설정 (필요 시 수정)
+# =========================
+ORG     = os.getenv("INFLUX_ORG", "HANBAT")
+BUCKET  = os.getenv("INFLUX_BUCKET", "TEMPER")
+TOKEN   = os.getenv("INFLUX_TOKEN", "RCT4a8V-f35ri3UYcz5Z3-KfHhTGInyE8PJVLMpmzRT96E6KcpFgbzJ5H5S6p-9qhVUb_tS4BHAvLRBOaKW7-g==")
+BASE    = os.getenv("INFLUX_URL_BASE", "http://localhost:8086")
+QUERY_URL = f"{BASE}/api/v2/query?org={ORG}"
 
-# 버킷/스키마 (당신의 쓰기 코드에 맞춤)
-INFLUX_BUCKET    = "TEMPER"
-MEASUREMENT_CPU  = "cpu_temperature"
-MEASUREMENT_GPU  = "gpu_temperature"
-MEASUREMENT_MDL  = "model_result"
-FIELD_NAME       = "value"  # 세 측정치 모두 field명이 'value'로 쓰이고 있음
+PI_HOST = os.getenv("PI_HOST", "192.168.43.6")
+PI_PORT = int(os.getenv("PI_PORT", "7000"))
 
-# 제어 대상 Raspberry Pi (PWM 수신 TCP 서버)
-PI_HOST = "192.168.43.6"
-PI_PORT = 7000
+# =========================
+# 1) Influx 쿼리
+# =========================
+headers = {
+    "Authorization": f"Token {TOKEN}",
+    "Content-Type": "application/vnd.flux",
+    "Accept": "application/csv"
+}
 
-# 루프/제어 파라미터
-LOOP_MS        = 2000
-TEMP_THRESHOLD = 40
-FORCE_PWM      = 100
-
-# 콘솔에서 동적 변경(자바와 동일 의미)
-_temp_threshold = TEMP_THRESHOLD
-_force_pwm      = FORCE_PWM
-
-stop_event = threading.Event()
-lock = threading.Lock()
-
-def _flux_last_for(measurement: str):
-    flux = f'''
-from(bucket: "{INFLUX_BUCKET}")
-  |> range(start: -24h)
-  |> filter(fn: (r) => r._measurement == "{measurement}" and r._field == "{FIELD_NAME}")
-  |> last()
-'''
-    body = {
-        "query": flux,
-        "type": "flux",
-        "dialect": {
-            "annotations": ["datatype","group","default"],
-            "header": True,
-            "delimiter": ","
-        }
-    }
-    headers = {
-        "Authorization": f"Token {INFLUXDB_TOKEN}",
-        "Content-Type": "application/json",
-        "Accept": "application/csv"
-    }
-    resp = requests.post(INFLUXDB_QUERY_URL, headers=headers, json=body, timeout=10)
-    if resp.status_code != 200:
-        print(f"[DB] {measurement} HTTP {resp.status_code} body: {resp.text[:300]}")
-        return {"ok": False, "value": None}
-    f = StringIO(resp.text)
-    reader = csv.DictReader(f)
-    for row in reader:
-        v = row.get("_value")
-        if v is None or v == "":
-            continue
-        return {"ok": True, "value": v}
-    return {"ok": True, "value": None}
-
-def fetch_latest_from_influx():
-    """
-    Data Explorer와 동일한 형태:
-      - aggregateWindow(every: 1m, fn: mean, createEmpty: false)
-      - cpu_temperature / gpu_temperature / model_result 세 측정치를 한 번에 가져옴
-      - CSV를 모두 스캔해서 각 측정치별 '가장 최신 _time' 한 줄만 취함
-    """
-    # 1) Explorer 스타일 Flux (네가 준 것과 동일하며 v.windowPeriod 대신 1m 고정)
-    flux = f'''
-from(bucket: "{INFLUX_BUCKET}")
-  |> range(start: -24h)
-  |> filter(fn: (r) =>
-      r["_measurement"] == "{MEASUREMENT_CPU}" or
-      r["_measurement"] == "{MEASUREMENT_GPU}" or
-      r["_measurement"] == "{MEASUREMENT_MDL}"
-  )
-  |> filter(fn: (r) => r["_field"] == "{FIELD_NAME}")
-  |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)
-  |> keep(columns: ["_time","_measurement","_value"])
+flux = f'''
+from(bucket: "{BUCKET}")
+  |> range(start: -7d)
+  |> filter(fn: (r) => r._measurement == "cpu_temperature" or
+                       r._measurement == "gpu_temperature" or
+                       r._measurement == "model_result")
+  |> filter(fn: (r) => r._field == "value")
+  |> group(columns: ["_measurement"])
   |> sort(columns: ["_time"], desc: true)
+  |> limit(n: 1)
 '''
-    body = {
-        "query": flux,
-        "type": "flux",
-        "dialect": {
-            "annotations": ["datatype","group","default"],
-            "header": True,
-            "delimiter": ","
-        }
-    }
-    headers = {
-        "Authorization": f"Token {INFLUXDB_TOKEN}",
-        "Content-Type": "application/json",
-        "Accept": "application/csv"
-    }
 
-    try:
-        resp = requests.post(INFLUXDB_QUERY_URL, headers=headers, json=body, timeout=12)
-        if resp.status_code != 200:
-            print(f"[DB] HTTP {resp.status_code}  body: {resp.text[:300]}")
-            return None
+def clamp(x, lo, hi):
+    return max(lo, min(hi, x))
 
-        # 참고용: 문제시 CSV 일부 찍어보기 (원하면 주석 해제)
-        # print("[DB][CSV head]\n", "\n".join(resp.text.splitlines()[:15]))
+@dataclass
+class FanController:
+    min_duty: int = 20
+    slew_per_sec: int = 25
+    t_on: float = 38.0
+    t_off: float = 35.0
+    last_pwm: int = 0
+    last_ts_ms: int = 0
 
-        f = StringIO(resp.text)
-        reader = csv.DictReader(f)
+    def _target_by_formula(self, cpu_temp: float, gpu_temp: float, model_result: int) -> int:
+        f_cpu = clamp(cpu_temp / 60.0, 0.0, 1.0)
+        f_gpu = clamp(gpu_temp / 60.0, 0.0, 1.0)
+        f_model = 1.0 if model_result > 0 else 0.0
+        pwm = (12.0 + 88.0 * max(f_cpu, f_gpu)) * f_model
+        return int(round(clamp(pwm, 0.0, 100.0)))
 
-        latest = {}  # {measurement: (_time_str, value_str)}
-        for row in reader:
-            m = row.get("_measurement")
-            v = row.get("_value")
-            t = row.get("_time")
-            if not m or v is None or v == "":
-                continue
-            # measurement별로 첫 행이 이미 sort(desc) 후 최신이므로, 최초 1개만 담으면 됨
-            if m not in latest:
-                latest[m] = (t, v)
+    def step(self, cpu_temp: float, gpu_temp: float, model_result: int) -> int:
+        target = self._target_by_formula(cpu_temp, gpu_temp, model_result)
+        T = max(cpu_temp, gpu_temp)
 
-            # 3개 다 채우면 조기 종료(최신 행부터 오니 빠름)
-            if (MEASUREMENT_CPU in latest and
-                MEASUREMENT_GPU in latest and
-                MEASUREMENT_MDL in latest):
-                break
+        # 히스테리시스
+        gate_on = (self.last_pwm == 0 and T >= self.t_on) or (self.last_pwm > 0 and T >= self.t_off)
+        if not gate_on:
+            target = 0
 
-        if not latest:
-            print("[DB] aggregateWindow 결과가 비어 있음 (최근 24h내 윈도우 평균값 없음)")
-            return None
+        # 최소 듀티
+        if target > 0 and target < self.min_duty:
+            target = self.min_duty
 
-        def to_float(x):
-            try: return float(x)
-            except: return 0.0
-        def to_int(x):
-            try: return int(float(x))
-            except: return 0
+        # 슬루 제한
+        now = int(time.time() * 1000)
+        dt = 1.0 if self.last_ts_ms == 0 else max(0.001, (now - self.last_ts_ms) / 1000.0)
+        max_delta = int(round(self.slew_per_sec * dt))
+        delta = max(-max_delta, min(max_delta, target - self.last_pwm))
+        self.last_pwm = int(clamp(self.last_pwm + delta, 0, 100))
+        self.last_ts_ms = now
+        return self.last_pwm
 
-        cpu = to_float(latest.get(MEASUREMENT_CPU, (None, 0.0))[1] if MEASUREMENT_CPU in latest else 0.0)
-        gpu = to_float(latest.get(MEASUREMENT_GPU, (None, 0.0))[1] if MEASUREMENT_GPU in latest else 0.0)
-        mdl = to_int  (latest.get(MEASUREMENT_MDL, (None, 0  ))[1] if MEASUREMENT_MDL in latest else 0)
+    def step_255(self, cpu_temp: float, gpu_temp: float, model_result: int) -> int:
+        return int(round(self.step(cpu_temp, gpu_temp, model_result) * 255.0 / 100.0))
 
-        # 디버깅시 타임스탬프도 보고 싶다면:
-        # print("[DB] times:", {k: v[0] for k,v in latest.items()})
-
-        return {"cpu_temp": cpu, "gpu_temp": gpu, "model_result": mdl}
-
-    except requests.RequestException as e:
-        print(f"[DB] 요청 예외: {e}")
-        return None
-    except Exception as e:
-        print(f"[DB] 파싱 예외: {e}")
-        return None
-    
-def calculate_pwm(cpu_temp, gpu_temp, model_result):
-    # 자바와 동일 공식
-    f_cpu = cpu_temp / 60.0
-    f_gpu = gpu_temp / 60.0
-    f_model = float(model_result)  # 0 또는 1
-    pwm = (12.0 + 88.0 * max(f_cpu, f_gpu)) * f_model
-    pwm = max(0, min(100, int(round(pwm))))
-    return pwm
-
-
-def send_to_pi(pwm_value: int):
-    msg = json.dumps({"pwm": int(pwm_value)}) + "\n"
-    try:
-        with closing(socket.create_connection((PI_HOST, PI_PORT), timeout=5)) as s:
-            s.sendall(msg.encode("utf-8"))
-        print(f"[SEND] → {PI_HOST}:{PI_PORT} {msg.strip()}")
-    except Exception as e:
-        print(f"[SEND] 실패: {e} (host={PI_HOST}, port={PI_PORT})")
-
-
-def console_input_loop():
-    if not sys.stdin.isatty():
-        return
-    import re
-    global _temp_threshold, _force_pwm
-    while not stop_event.is_set():
+def read_latest_values():
+    r = requests.post(QUERY_URL, headers=headers, data=flux, timeout=3)
+    r.raise_for_status()
+    csv_text = r.text.strip()
+    reader = csv.DictReader(io.StringIO(csv_text))
+    latest_values = {}
+    for row in reader:
+        m = row.get("_measurement")
+        if not m:
+            continue
         try:
-            raw = input(f"[설정] 임계 온도 입력 (현재 {_temp_threshold}): ").strip()
-            if re.match(r"^\d+$", raw):
-                with lock: _temp_threshold = int(raw)
-            else:
-                print("[설정] 정수만 입력하세요.")
-            raw = input(f"[설정] 강제 PWM 값 입력 (현재 {_force_pwm}): ").strip()
-            if re.match(r"^\d+$", raw):
-                v = int(raw)
-                if 0 <= v <= 100:
-                    with lock: _force_pwm = v
-                else:
-                    print("[설정] 0~100만 허용")
-            else:
-                print("[설정] 정수만 입력하세요.")
-            print(f"[설정] 업데이트: tempThreshold={_temp_threshold}, forcePwm={_force_pwm}")
-        except EOFError:
-            break
-        except Exception as e:
-            print(f"[설정] 입력 오류: {e}")
+            v = float(row["_value"]) if row["_value"] is not None else None
+        except:
+            v = None
+        latest_values[m] = v
+    return latest_values
 
-
-def control_loop():
-    period = max(50, LOOP_MS) / 1000.0
-    print(f"[LOOP] 시작: 주기={period:.3f}s, target={PI_HOST}:{PI_PORT}, bucket={INFLUX_BUCKET}/(cpu|gpu|model)")
-
-    while not stop_event.is_set():
-        t0 = time.time()
-        try:
-            row = fetch_latest_from_influx()
-            if not row:
-                print("[DB] 최근 데이터 없음/쿼리 실패 → PWM=0 전송")
-                send_to_pi(0)
-            else:
-                cpu = float(row["cpu_temp"])
-                gpu = float(row["gpu_temp"])
-                model = int(row["model_result"])
-
-                pwm = calculate_pwm(cpu, gpu, model)
-
-                with lock:
-                    thr = _temp_threshold
-                    fpw = _force_pwm
-
-                if cpu >= thr or gpu >= thr:
-                    pwm = fpw
-                    print(f"[CTRL] 임계 초과({thr}°C) → 강제 PWM={fpw} (cpu={cpu:.1f}, gpu={gpu:.1f}, model={model})")
-                else:
-                    print(f"[CTRL] calc pwm={pwm} (cpu={cpu:.1f}, gpu={gpu:.1f}, model={model})")
-
-                send_to_pi(pwm)
-
-        except Exception as e:
-            print(f"[CTRL] 루프 예외: {e}")
-
-        elapsed = time.time() - t0
-        time.sleep(max(0.0, period - elapsed))
-
+_seq = 0
+def send_to_pi(pwm_255: int):
+    """
+    PWM 값을 정수로만 전송 (ex: '180\n')
+    라즈베리파이는 이를 그대로 수신해서 duty로 사용.
+    """
+    payload = f"{int(pwm_255)}\n".encode()
+    with socket.create_connection((PI_HOST, PI_PORT), timeout=2) as s:
+        s.sendall(payload)
 
 def main():
-    th = threading.Thread(target=console_input_loop, name="console-input", daemon=True)
-    th.start()
-    try:
-        control_loop()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        stop_event.set()
-        print("[MAIN] 종료")
+    ctl = FanController()
+    while True:
+        try:
+            vals = read_latest_values()
+            cpu = vals.get("cpu_temperature")
+            gpu = vals.get("gpu_temperature")
+            model = vals.get("model_result")
 
+            if cpu is None or gpu is None or model is None:
+                print("[controller] missing data → PWM=0")
+                send_to_pi(0)
+                time.sleep(1.0)
+                continue
+
+            pwm_percent = ctl.step(cpu, gpu, int(model))
+            pwm_255 = ctl.step_255(cpu, gpu, int(model))
+            print(f"CPU={cpu:.1f}°C GPU={gpu:.1f}°C MODEL={int(model)} → PWM={pwm_percent}% ({pwm_255}/255)")
+            send_to_pi(pwm_255)
+
+        except requests.HTTPError as he:
+            print("[controller] HTTP error:", he)
+            send_to_pi(0)
+        except (socket.timeout, ConnectionRefusedError, OSError) as ne:
+            print("[controller] network error:", ne)
+        except Exception as e:
+            print("[controller] error:", e)
+            send_to_pi(0)
+
+        time.sleep(1.0)
 
 if __name__ == "__main__":
-    signal.signal(signal.SIGINT,  lambda *_: stop_event.set())
-    signal.signal(signal.SIGTERM, lambda *_: stop_event.set())
     main()
-
-
-
-
-
-
