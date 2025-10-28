@@ -11,8 +11,8 @@ import java.util.Scanner;
 public class FanControlScheduler {
 
     private final JdbcTemplate jdbcTemplate;
-    private static final String PI_HOST = "0.0.0.0"; // 라즈베리파이 IP
-    private static final int PI_PORT = 6000;       
+    private static final String PI_HOST = "192.168.43.6"; // 라즈베리파이 IP
+    private static final int PI_PORT = 7000;       
 
     // 동적으로 바뀔 설정값 (나중에 Frontend 연동)
     private volatile int tempThreshold = 40;  // 몇 도 이상일 때 강제 동작?
