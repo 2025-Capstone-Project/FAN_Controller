@@ -45,19 +45,19 @@ def clamp(x, lo, hi):
 
 @dataclass
 class FanController:
-    min_duty: int = 20
+    min_duty: int = 40
     slew_per_sec: int = 25
-    t_on: float = 38.0
-    t_off: float = 35.0
+    t_on: float = 25.0 #25도 이상일시, FAN ON
+    t_off: float = 20.0 #20도 이하일시, FAN OFF
     last_pwm: int = 0
     last_ts_ms: int = 0
+    mode: str = "auto"  # "auto", "manual", "range"
 
     def _target_by_formula(self, cpu_temp: float, gpu_temp: float, model_result: int) -> int:
         f_cpu = clamp(cpu_temp / 60.0, 0.0, 1.0)
         f_gpu = clamp(gpu_temp / 60.0, 0.0, 1.0)
         f_model = 1.0 if model_result > 0 else 0.0
-        pwm = (35.0 + 88.0 * max(f_cpu, f_gpu) * f_model)
-        print(pwm)
+        pwm = 40.0 + (88.0 * max(f_cpu, f_gpu) * f_model)
         return int(round(clamp(pwm, 0.0, 100.0)))
 
     def step(self, cpu_temp: float, gpu_temp: float, model_result: int) -> int:
@@ -67,7 +67,7 @@ class FanController:
         # 히스테리시스
         gate_on = (self.last_pwm == 0 and T >= self.t_on) or (self.last_pwm > 0 and T >= self.t_off)
         if not gate_on:
-            target = 0
+            target = self.last_pwm
 
         # 최소 듀티
         if target > 0 and target < self.min_duty:
@@ -84,17 +84,6 @@ class FanController:
 
     def step_255(self, cpu_temp: float, gpu_temp: float, model_result: int) -> int:
         return int(round(self.step(cpu_temp, gpu_temp, model_result) * 255.0 / 100.0))
-
-def calculate_pwm_direct(cpu_temp: float, gpu_temp: float, model_result: int) -> int:
-
-    f_cpu = max(0.0, min(cpu_temp / 60.0, 1.0))
-    f_gpu = max(0.0, min(gpu_temp / 60.0, 1.0))
-    f_model = 1.0 if model_result > 0 else 0.0
-
-    pwm = 40.0 + (88.0 * max(f_cpu, f_gpu) * f_model)
-    pwm = max(0.0, min(pwm, 100.0))  # 0~100% 제한
-    pwm_255 = int(round(pwm * 255.0 / 100.0))  # 0~255 변환
-    return pwm_255
 
 def read_latest_values():
     r = requests.post(QUERY_URL, headers=headers, data=flux, timeout=3)
@@ -138,8 +127,8 @@ def main():
                 time.sleep(1.0)
                 continue
 
-            pwm_255 = calculate_pwm_direct(cpu, gpu, int(model))
-            print(f"CPU={cpu:.1f}°C GPU={gpu:.1f}°C MODEL={int(model)} → PWM={pwm_255}% ({pwm_255}/255)")
+            pwm_255 = ctl.step(cpu, gpu, int(model))
+            print(f"CPU={cpu:.1f}°C GPU={gpu:.1f}°C MODEL={int(model)} → PWM={pwm_255}%")
             send_to_pi(pwm_255)
 
         except requests.HTTPError as he:
@@ -155,6 +144,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
