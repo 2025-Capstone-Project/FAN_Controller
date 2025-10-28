@@ -91,7 +91,7 @@ def calculate_pwm_direct(cpu_temp: float, gpu_temp: float, model_result: int) ->
       f_cpu = cpu_temp / 60
       f_gpu = gpu_temp / 60
       f_model = 0 or 1
-      pwm = (12 + 88 * max(f_cpu, f_gpu)) * f_model
+      pwm = 40 + 88 * max(f_cpu, f_gpu) * f_model
     """
     f_cpu = max(0.0, min(cpu_temp / 60.0, 1.0))
     f_gpu = max(0.0, min(gpu_temp / 60.0, 1.0))
@@ -161,6 +161,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
