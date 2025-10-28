@@ -85,6 +85,23 @@ class FanController:
     def step_255(self, cpu_temp: float, gpu_temp: float, model_result: int) -> int:
         return int(round(self.step(cpu_temp, gpu_temp, model_result) * 255.0 / 100.0))
 
+def calculate_pwm_direct(cpu_temp: float, gpu_temp: float, model_result: int) -> int:
+    """
+    주어진 식 그대로 적용:
+      f_cpu = cpu_temp / 60
+      f_gpu = gpu_temp / 60
+      f_model = 0 or 1
+      pwm = (12 + 88 * max(f_cpu, f_gpu)) * f_model
+    """
+    f_cpu = max(0.0, min(cpu_temp / 60.0, 1.0))
+    f_gpu = max(0.0, min(gpu_temp / 60.0, 1.0))
+    f_model = 1.0 if model_result > 0 else 0.0
+
+    pwm = (12.0 + 88.0 * max(f_cpu, f_gpu)) * f_model
+    pwm = max(0.0, min(pwm, 100.0))  # 0~100% 제한
+    pwm_255 = int(round(pwm * 255.0 / 100.0))  # 0~255 변환
+    return pwm_255
+
 def read_latest_values():
     r = requests.post(QUERY_URL, headers=headers, data=flux, timeout=3)
     r.raise_for_status()
@@ -127,9 +144,8 @@ def main():
                 time.sleep(1.0)
                 continue
 
-            pwm_percent = ctl.step(cpu, gpu, int(model))
-            pwm_255 = ctl.step_255(cpu, gpu, int(model))
-            print(f"CPU={cpu:.1f}°C GPU={gpu:.1f}°C MODEL={int(model)} → PWM={pwm_percent}% ({pwm_255}/255)")
+            pwm_255 = calculate_pwm_direct(cpu, gpu, int(model))
+            print(f"CPU={cpu:.1f}°C GPU={gpu:.1f}°C MODEL={int(model)} → PWM={pwm_255}% ({pwm_255}/255)")
             send_to_pi(pwm_255)
 
         except requests.HTTPError as he:
@@ -145,6 +161,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
