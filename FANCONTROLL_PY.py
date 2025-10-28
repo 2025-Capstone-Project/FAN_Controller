@@ -45,7 +45,7 @@ def clamp(x, lo, hi):
 
 @dataclass
 class FanController:
-    min_duty: int = 40
+    min_duty: int = 30 #최소 duty 30%
     slew_per_sec: int = 25
     t_on: float = 25.0 #25도 이상일시, FAN ON
     t_off: float = 20.0 #20도 이하일시, FAN OFF
@@ -57,11 +57,19 @@ class FanController:
         f_cpu = clamp(cpu_temp / 60.0, 0.0, 1.0)
         f_gpu = clamp(gpu_temp / 60.0, 0.0, 1.0)
         f_model = 1.0 if model_result > 0 else 0.0
-        pwm = 40.0 + (88.0 * max(f_cpu, f_gpu) * f_model)
+        pwm = 30.0 + (88.0 * max(f_cpu, f_gpu) * f_model)
         return int(round(clamp(pwm, 0.0, 100.0)))
 
-    def step(self, cpu_temp: float, gpu_temp: float, model_result: int) -> int:
-        target = self._target_by_formula(cpu_temp, gpu_temp, model_result)
+    def step(self, cpu_temp: float, gpu_temp: float, model_result: int, manual_pwm: int = None, cpu_threshold: int = None, gpu_threshold: int = None) -> int:
+        if self.mode == "auto":
+            target= self._target_by_formula(cpu_temp, gpu_temp, model_result)
+        elif self.mode == "manual" and manual_pwm is not None:
+            target = clamp(manual_pwm, 0,255)
+        elif self.mode == "range":
+            target = self._calculate_pwm_range(cpu_temp, gpu_temp, cpu_threshold, gpu_threshold)
+        else:
+            target = min_duty
+
         T = max(cpu_temp, gpu_temp)
 
         # 히스테리시스
@@ -82,8 +90,29 @@ class FanController:
         self.last_ts_ms = now
         return self.last_pwm
 
-    def step_255(self, cpu_temp: float, gpu_temp: float, model_result: int) -> int:
-        return int(round(self.step(cpu_temp, gpu_temp, model_result) * 255.0 / 100.0))
+    def step_255(self, cpu_temp: float, gpu_temp: float, model_result: int, manual_pwm: int = None, cpu_threshold: int = None, gpu_threshold: int = None) -> int:
+        # step에서 계산된 값은 이미 0~255
+        return self.step(cpu_temp, gpu_temp, model_result, manual_pwm, cpu_threshold, gpu_threshold)
+     
+    def _calculate_pwm_range(self, cpu_temp: float, gpu_temp: float, cpu_threshold: int, gpu_threshold: int) -> int:
+        """
+        range 모드에서는 CPU와 GPU의 경계 온도를 설정하고, 해당 온도 이하일 경우 최소 PWM으로 설정,
+        그 이상일 경우 자동 모드로 전환하여 계산.
+        """
+        # CPU / GPU 온도 경계값에 따른 PWM 계산
+        if cpu_temp <= cpu_threshold and gpu_temp <= gpu_threshold:
+            pwm = self.min_duty  # 최소 PWM 값
+        else:
+            pwm = -1  # auto 모드로 처리
+
+        # 자동 모드 (pwm이 -1이면 자동 모드로 넘겨서 처리)
+        if pwm == -1:
+            pwm = self._target_by_formula(cpu_temp, gpu_temp, 1)  # auto mode 처리/ model_result는 1 동기화
+
+        # PWM 값 클램프 (0~255 범위)
+        pwm = int(clamp(pwm, 0, 255))
+        
+        return pwm
 
 def read_latest_values():
     r = requests.post(QUERY_URL, headers=headers, data=flux, timeout=3)
@@ -114,6 +143,7 @@ def send_to_pi(pwm_255: int):
 
 def main():
     ctl = FanController()
+    
     while True:
         try:
             vals = read_latest_values()
@@ -127,7 +157,7 @@ def main():
                 time.sleep(1.0)
                 continue
 
-            pwm_255 = ctl.step(cpu, gpu, int(model))
+            pwm_255 = ctl.step(cpu, gpu, int(model), manual_pwm=None, cpu_threshold=cpu_threshold, gpu_threshold=gpu_threshold)
             print(f"CPU={cpu:.1f}°C GPU={gpu:.1f}°C MODEL={int(model)} → PWM={pwm_255}%")
             send_to_pi(pwm_255)
 
@@ -144,6 +174,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
