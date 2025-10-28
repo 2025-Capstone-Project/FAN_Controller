@@ -55,6 +55,7 @@ class FanController:
     def _target_by_formula(self, cpu_temp: float, gpu_temp: float, model_result: int) -> int:
         f_cpu = clamp(cpu_temp / 60.0, 0.0, 1.0)
         f_gpu = clamp(gpu_temp / 60.0, 0.0, 1.0)
+        print(f"{f_cpu}, {f_gpu}")
         f_model = 1.0 if model_result > 0 else 0.0
         pwm = (12.0 + 88.0 * max(f_cpu, f_gpu)) * f_model
         return int(round(clamp(pwm, 0.0, 100.0)))
@@ -144,3 +145,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
