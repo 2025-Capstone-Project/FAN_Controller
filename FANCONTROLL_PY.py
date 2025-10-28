@@ -29,8 +29,7 @@ _force_pwm      = FORCE_PWM
 stop_event = threading.Event()
 lock = threading.Lock()
 
-
-def _flux_last_for():
+def _flux_last_for(measurement: str):
     flux = f'''
 from(bucket: "{INFLUX_BUCKET}")
   |> range(start: -24h)
@@ -53,41 +52,16 @@ from(bucket: "{INFLUX_BUCKET}")
     }
     resp = requests.post(INFLUXDB_QUERY_URL, headers=headers, json=body, timeout=10)
     if resp.status_code != 200:
-        # 문제 원인 바로 보이게 로그
         print(f"[DB] {measurement} HTTP {resp.status_code} body: {resp.text[:300]}")
         return {"ok": False, "value": None}
     f = StringIO(resp.text)
     reader = csv.DictReader(f)
     for row in reader:
-        # 첫 레코드의 _value 반환
         v = row.get("_value")
         if v is None or v == "":
             continue
         return {"ok": True, "value": v}
-    return {"ok": True, "value": None}  # 데이터 없음
-
-def fetch_latest_from_influx():
-    cpu_r = _flux_last_for(MEASUREMENT_CPU)
-    gpu_r = _flux_last_for(MEASUREMENT_GPU)
-    mdl_r = _flux_last_for(MEASUREMENT_MDL)
-
-    # 파싱 (없으면 0)
-    try: cpu = float(cpu_r["value"]) if cpu_r["value"] is not None else 0.0
-    except: cpu = 0.0
-    try: gpu = float(gpu_r["value"]) if gpu_r["value"] is not None else 0.0
-    except: gpu = 0.0
-    try: model = int(float(mdl_r["value"])) if mdl_r["value"] is not None else 0
-    except: model = 0
-
-    # 세 값이 전부 None/0으로만 나오는지 확인해 보고 싶다면 여기에 디버그 프린트 추가 가능
-    # print("[DBG]", cpu_r, gpu_r, mdl_r)
-
-    # 최소 하나라도 들어왔으면 dict 반환
-    if cpu_r["value"] is None and gpu_r["value"] is None and mdl_r["value"] is None:
-        print("[DB] 최근 데이터가 없습니다 (세 measurement 모두 last() 결과 없음)")
-        return None
-    return {"cpu_temp": cpu, "gpu_temp": gpu, "model_result": model}
-
+    return {"ok": True, "value": None}
 
 def calculate_pwm(cpu_temp, gpu_temp, model_result):
     # 자바와 동일 공식
@@ -190,6 +164,7 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT,  lambda *_: stop_event.set())
     signal.signal(signal.SIGTERM, lambda *_: stop_event.set())
     main()
+
 
 
 
