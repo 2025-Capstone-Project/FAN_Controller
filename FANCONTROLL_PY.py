@@ -31,7 +31,6 @@ lock = threading.Lock()
 
 
 def _flux_body_union_pivot():
-"""특정 measurement의 value 필드에서 last() 1개를 CSV로 받아 파싱"""
     flux = f'''
 from(bucket: "{INFLUX_BUCKET}")
   |> range(start: -24h)
@@ -191,4 +190,5 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT,  lambda *_: stop_event.set())
     signal.signal(signal.SIGTERM, lambda *_: stop_event.set())
     main()
+
 
