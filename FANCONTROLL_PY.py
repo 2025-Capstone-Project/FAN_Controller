@@ -64,26 +64,96 @@ from(bucket: "{INFLUX_BUCKET}")
     return {"ok": True, "value": None}
 
 def fetch_latest_from_influx():
-    cpu_r = _flux_last_for(MEASUREMENT_CPU)
-    gpu_r = _flux_last_for(MEASUREMENT_GPU)
-    mdl_r = _flux_last_for(MEASUREMENT_MDL)
+    """
+    Data Explorer와 동일한 형태:
+      - aggregateWindow(every: 1m, fn: mean, createEmpty: false)
+      - cpu_temperature / gpu_temperature / model_result 세 측정치를 한 번에 가져옴
+      - CSV를 모두 스캔해서 각 측정치별 '가장 최신 _time' 한 줄만 취함
+    """
+    # 1) Explorer 스타일 Flux (네가 준 것과 동일하며 v.windowPeriod 대신 1m 고정)
+    flux = f'''
+from(bucket: "{INFLUX_BUCKET}")
+  |> range(start: -24h)
+  |> filter(fn: (r) =>
+      r["_measurement"] == "{MEASUREMENT_CPU}" or
+      r["_measurement"] == "{MEASUREMENT_GPU}" or
+      r["_measurement"] == "{MEASUREMENT_MDL}"
+  )
+  |> filter(fn: (r) => r["_field"] == "{FIELD_NAME}")
+  |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)
+  |> keep(columns: ["_time","_measurement","_value"])
+  |> sort(columns: ["_time"], desc: true)
+'''
+    body = {
+        "query": flux,
+        "type": "flux",
+        "dialect": {
+            "annotations": ["datatype","group","default"],
+            "header": True,
+            "delimiter": ","
+        }
+    }
+    headers = {
+        "Authorization": f"Token {INFLUXDB_TOKEN}",
+        "Content-Type": "application/json",
+        "Accept": "application/csv"
+    }
 
-    # 파싱 (없으면 0)
-    try: cpu = float(cpu_r["value"]) if cpu_r["value"] is not None else 0.0
-    except: cpu = 0.0
-    try: gpu = float(gpu_r["value"]) if gpu_r["value"] is not None else 0.0
-    except: gpu = 0.0
-    try: model = int(float(mdl_r["value"])) if mdl_r["value"] is not None else 0
-    except: model = 0
+    try:
+        resp = requests.post(INFLUXDB_QUERY_URL, headers=headers, json=body, timeout=12)
+        if resp.status_code != 200:
+            print(f"[DB] HTTP {resp.status_code}  body: {resp.text[:300]}")
+            return None
 
-    # 세 값이 전부 None/0으로만 나오는지 확인해 보고 싶다면 여기에 디버그 프린트 추가 가능
-    # print("[DBG]", cpu_r, gpu_r, mdl_r)
+        # 참고용: 문제시 CSV 일부 찍어보기 (원하면 주석 해제)
+        # print("[DB][CSV head]\n", "\n".join(resp.text.splitlines()[:15]))
 
-    # 최소 하나라도 들어왔으면 dict 반환
-    if cpu_r["value"] is None and gpu_r["value"] is None and mdl_r["value"] is None:
-        print("[DB] 최근 데이터가 없습니다 (세 measurement 모두 last() 결과 없음)")
+        f = StringIO(resp.text)
+        reader = csv.DictReader(f)
+
+        latest = {}  # {measurement: (_time_str, value_str)}
+        for row in reader:
+            m = row.get("_measurement")
+            v = row.get("_value")
+            t = row.get("_time")
+            if not m or v is None or v == "":
+                continue
+            # measurement별로 첫 행이 이미 sort(desc) 후 최신이므로, 최초 1개만 담으면 됨
+            if m not in latest:
+                latest[m] = (t, v)
+
+            # 3개 다 채우면 조기 종료(최신 행부터 오니 빠름)
+            if (MEASUREMENT_CPU in latest and
+                MEASUREMENT_GPU in latest and
+                MEASUREMENT_MDL in latest):
+                break
+
+        if not latest:
+            print("[DB] aggregateWindow 결과가 비어 있음 (최근 24h내 윈도우 평균값 없음)")
+            return None
+
+        def to_float(x):
+            try: return float(x)
+            except: return 0.0
+        def to_int(x):
+            try: return int(float(x))
+            except: return 0
+
+        cpu = to_float(latest.get(MEASUREMENT_CPU, (None, 0.0))[1] if MEASUREMENT_CPU in latest else 0.0)
+        gpu = to_float(latest.get(MEASUREMENT_GPU, (None, 0.0))[1] if MEASUREMENT_GPU in latest else 0.0)
+        mdl = to_int  (latest.get(MEASUREMENT_MDL, (None, 0  ))[1] if MEASUREMENT_MDL in latest else 0)
+
+        # 디버깅시 타임스탬프도 보고 싶다면:
+        # print("[DB] times:", {k: v[0] for k,v in latest.items()})
+
+        return {"cpu_temp": cpu, "gpu_temp": gpu, "model_result": mdl}
+
+    except requests.RequestException as e:
+        print(f"[DB] 요청 예외: {e}")
         return None
-    return {"cpu_temp": cpu, "gpu_temp": gpu, "model_result": model}
+    except Exception as e:
+        print(f"[DB] 파싱 예외: {e}")
+        return None
     
 def calculate_pwm(cpu_temp, gpu_temp, model_result):
     # 자바와 동일 공식
@@ -186,6 +256,7 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT,  lambda *_: stop_event.set())
     signal.signal(signal.SIGTERM, lambda *_: stop_event.set())
     main()
+
 
 
 
