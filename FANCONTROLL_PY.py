@@ -30,7 +30,7 @@ stop_event = threading.Event()
 lock = threading.Lock()
 
 
-def _flux_body_union_pivot():
+def _flux_last_for():
     flux = f'''
 from(bucket: "{INFLUX_BUCKET}")
   |> range(start: -24h)
@@ -190,5 +190,6 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT,  lambda *_: stop_event.set())
     signal.signal(signal.SIGTERM, lambda *_: stop_event.set())
     main()
+
 
 
