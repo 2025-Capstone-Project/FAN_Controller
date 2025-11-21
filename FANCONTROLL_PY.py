@@ -16,8 +16,8 @@ TOKEN   = os.getenv("INFLUX_TOKEN", "RCT4a8V-f35ri3UYcz5Z3-KfHhTGInyE8PJVLMpmzRT
 BASE    = os.getenv("INFLUX_URL_BASE", "http://localhost:8086")
 QUERY_URL = f"{BASE}/api/v2/query?org={ORG}"
 
-PI_HOST = os.getenv("PI_HOST", "192.168.43.6")
-PI_PORT = int(os.getenv("PI_PORT", "7000"))
+PI_HOST = os.getenv("PI_HOST", "192.168.43.6") #Raspberry Pi IP
+PI_PORT = int(os.getenv("PI_PORT", "6000")) #Raspberry Pi PORT
 
 # =========================
 # 1) Influx 쿼리
@@ -138,8 +138,8 @@ def read_latest_values():
     return latest_values
 
 _seq = 0
-def send_to_pi(pwm_255: int):    
-    payload = json.dumps({"pwm": int(pwm_val)}).encode() # JSON 포맷으로 변경
+def send_to_pi(pwm_value: int):    
+    payload = json.dumps({"pwm": int(pwm_value)}).encode() # JSON 포맷으로 변경
     try:
         with socket.create_connection((PI_HOST, PI_PORT), timeout=2) as s:
             s.sendall(payload)
@@ -148,13 +148,4 @@ def send_to_pi(pwm_255: int):
 
 if __name__ == "__main__":
     print("이 파일은 라이브러리입니다. process_control_command.py를 실행하세요.")
-
-
-
-
-
-
-
-
-
 
