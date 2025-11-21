@@ -1,5 +1,3 @@
-# 파일 이름: fan_controller_and_reporter.py
-
 import socket
 import threading
 import json
