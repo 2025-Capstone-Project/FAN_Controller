@@ -1,73 +1,78 @@
 import asyncio
 import websockets
 import json
-from FANCONTROLL_PY import FanController, read_latest_values
+from FANCONTROLL_PY import FanController, read_latest_values, send_to_pi
 
-# 이 핸들러는 클라이언트 한 명과 연결이 유지되는 동안 계속 실행됩니다.
+global_ctl = FanController()
+
+async def automation_loop():
+    """
+    기존 FANCONTROLL_PY.py의 main()에 있던 역할을 여기서 수행합니다.
+    웹소켓 통신과 상관없이 1초마다 계속 돕니다.
+    """
+    print("[System] 자동 제어 루프 시작")
+    while True:
+        try:
+            # 1. 센서 값 읽기
+            vals = read_latest_values()
+            cpu = vals.get("cpu_temperature", 0)
+            gpu = vals.get("gpu_temperature", 0)
+            model = vals.get("model_result", 0)
+            
+            if cpu is None: cpu = 0
+            if gpu is None: gpu = 0
+            if model is None: model = 0
+
+            # 2. PWM 계산 (global_ctl의 현재 모드(auto/manual)에 따라 내부에서 계산)
+            pwm_value = global_ctl.step(cpu, gpu, int(model))
+            
+            # 3. 라즈베리파이로 전송
+            # (send_to_pi도 동기 함수이므로 짧게 실행됨)
+            send_to_pi(pwm_value)
+            
+            # 로그 출력 (옵션)
+            # print(f"[Loop] Mode={global_ctl.mode}, PWM={pwm_value}, CPU={cpu}")
+
+        except Exception as e:
+            print(f"[Loop Error] {e}")
+
+        # 4. 1초 대기 (다른 작업들에게 양보)
+        await asyncio.sleep(1.0)
+
 async def handle_connection(websocket, path):
-    print(f"Client connected from {websocket.remote_address}")
-    # 팬 컨트롤러 객체를 연결마다 하나씩 생성
-    # 모드는 첫 메시지로 설정하거나, 기본값으로 시작할 수 있습니다.
-    ctl = FanController(mode="auto") 
-
+    """웹 클라이언트 연결 처리"""
+    print(f"[Web] Client connected: {websocket.remote_address}")
     try:
-        # async for를 사용해 클라이언트가 보내는 모든 메시지를 계속해서 받습니다.
         async for message in websocket:
             data = json.loads(message)
-            print(f"Received data: {data}")
+            print(f"[Web] Received: {data}")
 
-            # 받은 데이터 처리
-            mode = data.get("mode")
-            if mode:
-                ctl.set_mode(mode) # FanController에 모드 변경 메서드가 있다고 가정
-
-            manual_pwm = data.get("manual_pwm")
-            cpu_threshold = data.get("cpu_threshold", 40)
-            gpu_threshold = data.get("gpu_threshold", 40)
-
-            """
-            current_cpu_temp = 35 # 예시: 실제 센서 값 읽어오기
-            current_gpu_temp = 42 # 예시: 실제 센서 값 읽어오기
-            """
-            try:
-                    vals= read_latest_values()
-
-                    cpu_temp= vals.get("cpu_temperature")
-                    gpu_temp= vals.get("gpu_temperature")
-                    model_result= vals.get("model_result")
-
-                    if cpu_temp is None or gpu_temp is None or model_result is None:
-                        raise ValueError("InfluxDB에서 못가져왔어요!")
-            except Exception as e:
-                    print(f"센서 데이터 읽기 오류: {e}")
-                    await websocket.send(json.dumps({"status": "error", "message": str(e)}))
-                    continue
+            # 1. 웹에서 온 명령을 'global_ctl'에 반영
+            if "mode" in data:
+                global_ctl.mode = data["mode"] # "auto" or "manual"
             
-            pwm_value = ctl.step(
-                cpu_temp=cpu_temp, 
-                gpu_temp=gpu_temp, 
-                model_result=int(model_result), 
-                manual_pwm=manual_pwm, 
-                cpu_threshold=cpu_threshold, 
-                gpu_threshold=gpu_threshold
-            )
-
-            # 결과를 프론트로 전송
-            result_data = {"status": "success", "pwm": pwm_value, "cpu_temp": current_cpu_temp}
-            await websocket.send(json.dumps(result_data))
-        
+            if "manual_pwm" in data:
+                global_ctl.manual_target = int(data["manual_pwm"])
+            
+            if "cpu_threshold" in data:
+                global_ctl.cpu_thresh = int(data["cpu_threshold"])
+            
+            # 2. 현재 상태를 바로 응답 (옵션)
+            response = {
+                "status": "ok",
+                "current_mode": global_ctl.mode,
+                "current_pwm": global_ctl.last_pwm
+            }
+            await websocket.send(json.dumps(response))
+            
     except websockets.exceptions.ConnectionClosed:
-        print(f"Client disconnected from {websocket.remote_address}")
-    finally:
-        # 연결이 끊어졌을 때 처리할 코드 (예: 팬을 안전한 상태로 설정)
-        print("Connection closed.")
-
-
+        print("[Web] Client disconnected")
 async def main():
-    # 외부 접속을 허용하려면 "0.0.0.0" 사용
+    # Web과 8765포트로 연결
     async with websockets.serve(handle_connection, "localhost", 8765):
         print("WebSocket server started at ws://localhost:8765")
         await asyncio.Future()  # 서버가 종료되지 않도록 대기
 
 if __name__ == "__main__":
+
     asyncio.run(main())
