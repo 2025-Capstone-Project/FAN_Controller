@@ -45,13 +45,20 @@ def clamp(x, lo, hi):
 
 @dataclass
 class FanController:
-    min_duty: int = 30 #최소 duty 30%
+    min_duty: int = 30
     slew_per_sec: int = 25
-    t_on: float = 25.0 #25도 이상일시, FAN ON
-    t_off: float = 20.0 #20도 이하일시, FAN OFF
+    t_on: float = 25.0
+    t_off: float = 20.0
     last_pwm: int = 0
     last_ts_ms: int = 0
-    mode: str = "auto"  # "auto", "manual", "range"
+    
+    # 상태 관리 변수 추가
+    mode: str = "auto"  # "auto", "manual"
+    manual_target: int = 0 # 수동 모드일 때 목표값
+    
+    # 임계값 저장
+    cpu_thresh: int = 40
+    gpu_thresh: int = 40
 
     def _target_by_formula(self, cpu_temp: float, gpu_temp: float, model_result: int) -> int:
         f_cpu = clamp(cpu_temp / 60.0, 0.0, 1.0)
@@ -60,39 +67,38 @@ class FanController:
         pwm = 30.0 + (88.0 * max(f_cpu, f_gpu) * f_model)
         return int(round(clamp(pwm, 0.0, 100.0)))
 
-    def step(self, cpu_temp: float, gpu_temp: float, model_result: int, manual_pwm: int = None, cpu_threshold: int = None, gpu_threshold: int = None) -> int:
-        if self.mode == "auto":
-            target= self._target_by_formula(cpu_temp, gpu_temp, model_result)
-        elif self.mode == "manual" and manual_pwm is not None:
-            target = clamp(manual_pwm, 0,255)
-        elif self.mode == "range":
-            target = self._calculate_pwm_range(cpu_temp, gpu_temp, cpu_threshold, gpu_threshold)
+    # step 함수 단순화: 내부 상태(mode)를 보고 알아서 결정하도록 변경
+    def step(self, cpu_temp: float, gpu_temp: float, model_result: int) -> int:
+        
+        # 1. 목표 PWM 결정 (모드에 따라)
+        if self.mode == "manual":
+            target = clamp(self.manual_target, 0, 100) # 수동 값 사용
         else:
-            target = min_duty
+            # auto 모드 (range 로직 포함 가능)
+            # 간단하게 range 로직을 통합: 임계값 이하면 최소, 아니면 공식
+            if cpu_temp <= self.cpu_thresh and gpu_temp <= self.gpu_thresh:
+                target = self.min_duty
+            else:
+                target = self._target_by_formula(cpu_temp, gpu_temp, model_result)
 
+        # 2. 슬루 레이트 및 히스테리시스 적용 (급격한 변화 방지)
         T = max(cpu_temp, gpu_temp)
-
-        # 히스테리시스
         gate_on = (self.last_pwm == 0 and T >= self.t_on) or (self.last_pwm > 0 and T >= self.t_off)
-        if not gate_on:
-            target = self.last_pwm
+        
+        # 팬이 꺼져있는데 켜질 온도가 아니면 0 유지 (단, 수동모드면 무시하고 돔)
+        if self.mode == "auto" and not gate_on:
+             target = 0 # 혹은 self.last_pwm 유지 전략
 
-        # 최소 듀티
-        if target > 0 and target < self.min_duty:
-            target = self.min_duty
-
-        # 슬루 제한
+        # PWM 변화량 제한 (Slew Rate)
         now = int(time.time() * 1000)
         dt = 1.0 if self.last_ts_ms == 0 else max(0.001, (now - self.last_ts_ms) / 1000.0)
         max_delta = int(round(self.slew_per_sec * dt))
         delta = max(-max_delta, min(max_delta, target - self.last_pwm))
+        
         self.last_pwm = int(clamp(self.last_pwm + delta, 0, 100))
         self.last_ts_ms = now
+        
         return self.last_pwm
-
-    def step_255(self, cpu_temp: float, gpu_temp: float, model_result: int, manual_pwm: int = None, cpu_threshold: int = None, gpu_threshold: int = None) -> int:
-        # step에서 계산된 값은 이미 0~255
-        return self.step(cpu_temp, gpu_temp, model_result, manual_pwm, cpu_threshold, gpu_threshold)
      
     def _calculate_pwm_range(self, cpu_temp: float, gpu_temp: float, cpu_threshold: int, gpu_threshold: int) -> int:
         """
@@ -132,48 +138,16 @@ def read_latest_values():
     return latest_values
 
 _seq = 0
-def send_to_pi(pwm_255: int):
-    """
-    PWM 값을 정수로만 전송 (ex: '180\n')
-    라즈베리파이는 이를 그대로 수신해서 duty로 사용.
-    """
-    payload = f"{int(pwm_255)}\n".encode()
-    with socket.create_connection((PI_HOST, PI_PORT), timeout=2) as s:
-        s.sendall(payload)
-
-def main():
-    ctl = FanController()
-    
-    while True:
-        try:
-            vals = read_latest_values()
-            cpu = vals.get("cpu_temperature")
-            gpu = vals.get("gpu_temperature")
-            model = vals.get("model_result")
-
-            if cpu is None or gpu is None or model is None:
-                print("[controller] missing data → PWM=0")
-                send_to_pi(0)
-                time.sleep(1.0)
-                continue
-
-            pwm_255 = ctl.step(cpu, gpu, int(model), manual_pwm=None, cpu_threshold=cpu_threshold, gpu_threshold=gpu_threshold)
-            print(f"CPU={cpu:.1f}°C GPU={gpu:.1f}°C MODEL={int(model)} → PWM={pwm_255}%")
-            send_to_pi(pwm_255)
-
-        except requests.HTTPError as he:
-            print("[controller] HTTP error:", he)
-            send_to_pi(0)
-        except (socket.timeout, ConnectionRefusedError, OSError) as ne:
-            print("[controller] network error:", ne)
-        except Exception as e:
-            print("[controller] error:", e)
-            send_to_pi(0)
-
-        time.sleep(1.0)
+def send_to_pi(pwm_255: int):    
+    payload = json.dumps({"pwm": int(pwm_val)}).encode() # JSON 포맷으로 변경
+    try:
+        with socket.create_connection((PI_HOST, PI_PORT), timeout=2) as s:
+            s.sendall(payload)
+    except Exception as e:
+        print(f"[Network] Pi 전송 실패: {e}")
 
 if __name__ == "__main__":
-    main()
+    print("이 파일은 라이브러리입니다. process_control_command.py를 실행하세요.")
 
 
 
