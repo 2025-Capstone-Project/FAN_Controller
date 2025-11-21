@@ -1,4 +1,4 @@
-# 2025 Capstone Project - Intelligent Fan Controller
+# 2025 Capstone Project - Fan Controller
 
 **[2025-Capstone-Project/FAN_Controller](https://github.com/2025-Capstone-Project/FAN_Controller)**
 
