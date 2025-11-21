@@ -23,10 +23,10 @@
 ## 주요 기능 (Features)
 
 
-### 1. 듀얼 모드 제어 (Dual Mode Control)
+### 1. 3-모드 팬 제어 (Auto / Manual / Range)
 *   **Auto Mode:** CPU/GPU 온도 및 AI 모델 부하에 따라 PWM을 자동으로 조절합니다.
 *   **Manual Mode:** 웹 인터페이스를 통해 사용자가 직접 팬 속도(0~100%)를 고정할 수 있습니다.
-
+*   **Range Mode:** 사용자가 설정한 CPU/GPU 임계 온도 이하에서는 최소 듀티(min duty)로 저소음 운전을 유지하고, 임계값을 초과하면 Auto Mode와 동일한 방식으로 PWM을 가변 제어합니다.
 
 ### 2. 안정적인 제어 알고리즘
 *   **Hysteresis:** 온도가 경계값에서 등락할 때 팬이 빈번하게 켜졌다 꺼지는 현상을 방지합니다.
