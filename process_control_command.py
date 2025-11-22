@@ -94,8 +94,8 @@ async def automation_loop():
             # (send_to_pi도 동기 함수이므로 짧게 실행됨)
             send_to_pi(pwm_value)
             
-            # 로그 출력 (옵션)
-            print(f"[Loop] Mode={global_ctl.mode}, PWM={pwm_value}, CPU={cpu}")
+            # 로그 출력
+            print(f"[Loop] Mode={global_ctl.mode}, PWM={pwm_value}, CPU={cpu}, GPU={gpu}")
 
         except Exception as e:
             print(f"[Loop Error] {e}")
@@ -125,8 +125,6 @@ async def handle_connection(websocket, path=None):
 
             if "gpu_threshold" in data:
                 global_ctl.gpu_thresh = int(data["gpu_threshold"])
-
-            print(f"{global_ctl.mode}, {global_ctl.manual_target}, {global_ctl.cpu_thresh}, {global_ctl.gpu_thresh}")
             
             # 2. 현재 상태를 바로 응답 (옵션)
             response = {
@@ -138,8 +136,9 @@ async def handle_connection(websocket, path=None):
             
     except websockets.exceptions.ConnectionClosed:
         print("[Web] Client disconnected")
+        
 async def main():
-    # Web과 8765포트로 연결
+    # Web과 8765포트로 연결(host)
     async with websockets.serve(handle_connection, "0.0.0.0", 8765):
         print("WebSocket server started at ws://0.0.0.0:8765")
         asyncio.create_task(automation_loop())
@@ -148,6 +147,7 @@ async def main():
 if __name__ == "__main__":
 
     asyncio.run(main())
+
 
 
 
