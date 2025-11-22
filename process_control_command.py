@@ -9,44 +9,59 @@ class PatchedRequest(http11.Request):
     @classmethod
     def parse(cls, read_line):
         """
-        원래 http11.Request.parse() 구현에서
+        websockets.http11.Request.parse 를 그대로 가져오되,
         'Content-Length' 체크만 제거한 버전.
-        제너레이터 기반 코루틴이어야 하므로 async def 쓰면 안 됨.
+
+        제너레이터 기반 코루틴이어야 해서 async def 가 아니라
+        그냥 def + yield from 을 사용한다.
         """
-        # 요청 라인 파싱
-        request_line = yield from read_line(http11.MAX_REQUEST_LINE)
+        try:
+            # 원래 코드: parse_line 호출
+            request_line = yield from http11.parse_line(read_line)
+        except EOFError as exc:
+            raise EOFError(
+                "connection closed while reading HTTP request line"
+            ) from exc
 
         try:
+            # method, path, HTTP/1.1
             method, raw_path, version = request_line.split(b" ", 2)
-        except ValueError:  # pragma: no cover
-            raise ValueError(f"invalid HTTP request line: {request_line!r}")
-
-        if version != b"HTTP/1.1":
-            raise ValueError(f"unsupported HTTP version: {version!r}")
+        except ValueError:
+            # not enough values to unpack (expected 3, got 1-2)
+            raise ValueError(
+                f"invalid HTTP request line: {http11.d(request_line)}"
+            ) from None
 
         if method != b"GET":
-            raise ValueError(f"unsupported HTTP method: {method!r}")
+            raise ValueError(
+                f"unsupported HTTP method: {http11.d(method)}"
+            )
+        if version != b"HTTP/1.1":
+            raise ValueError(
+                f"unsupported HTTP version: {http11.d(version)}"
+            )
 
+        # 경로 디코딩
         path = raw_path.decode("ascii", "surrogateescape")
 
         # 헤더 파싱
         headers = yield from http11.parse_headers(read_line)
 
-        # 원래 코드:
-        #   if "Transfer-Encoding" in headers: ...
-        #   if "Content-Length" in headers: raise ValueError("unsupported request body")
-        #
-        # 우리는 'Transfer-Encoding'만 막고,
-        # 'Content-Length'는 허용해야 자바 HttpClient(WebSocket)의
-        # "Content-Length: 0" 헤더를 받아들일 수 있음.
+        # 여기까지가 http11.Request.parse 원본과 동일
+        # ---------------------------------------------------
+        # 아래 두 줄 중 'Content-Length' 체크만 제거한 상태
 
         if "Transfer-Encoding" in headers:
             raise NotImplementedError("transfer codings aren't supported")
 
-        # Content-Length는 더 이상 체크하지 않음
+        # 원래 있던 코드:
+        # if "Content-Length" in headers:
+        #     raise ValueError("unsupported request body")
+
+        # 이제는 Content-Length 헤더가 있어도 그대로 통과시킨다.
         return cls(path, headers)
 
-# 실제로 websockets 내부에서 사용하는 Request 클래스를 교체
+# websockets 모듈이 사용하는 Request 클래스를 패치 버전으로 교체
 http11.Request = PatchedRequest
 
 from FANCONTROLL_PY import FanController, read_latest_values, send_to_pi
@@ -133,6 +148,7 @@ async def main():
 if __name__ == "__main__":
 
     asyncio.run(main())
+
 
 
 
