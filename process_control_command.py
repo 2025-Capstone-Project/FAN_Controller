@@ -76,14 +76,15 @@ async def handle_connection(websocket, path):
         print("[Web] Client disconnected")
 async def main():
     # Web과 8765포트로 연결
-    async with websockets.serve(handle_connection, "localhost", 8765):
-        print("WebSocket server started at ws://localhost:8765")
+    async with websockets.serve(handle_connection, "0.0.0.0", 8765):
+        print("WebSocket server started at ws://0.0.0.0:8765")
         asyncio.create_task(automation_loop())
         await asyncio.Future()  # 서버가 종료되지 않도록 대기
 
 if __name__ == "__main__":
 
     asyncio.run(main())
+
 
 
 
