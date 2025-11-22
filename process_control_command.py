@@ -62,7 +62,7 @@ async def handle_connection(websocket, path):
             if "gpu_threshold" in data:
                 global_ctl.gpu_thresh = int(data["gpu_threshold"])
 
-            print(f"{global_ctl.mode), {global_ctl.manual_target}, {global_ctl.cpu_thresh}, {global_ctl.gpu_thresh}")
+            print(f"{global_ctl.mode}, {global_ctl.manual_target}, {global_ctl.cpu_thresh}, {global_ctl.gpu_thresh}")
             
             # 2. 현재 상태를 바로 응답 (옵션)
             response = {
@@ -84,6 +84,7 @@ async def main():
 if __name__ == "__main__":
 
     asyncio.run(main())
+
 
 
 
