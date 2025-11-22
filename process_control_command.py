@@ -49,13 +49,18 @@ async def handle_connection(websocket, path):
 
             # 1. 웹에서 온 명령을 'global_ctl'에 반영
             if "mode" in data:
-                global_ctl.mode = data["mode"] # "auto" or "manual"
+                m = str(data["mode"]).lower()
+                if m in ("auto", "manual", "range"):
+                    global_ctl.mode = m
             
             if "manual_pwm" in data:
                 global_ctl.manual_target = int(data["manual_pwm"])
             
             if "cpu_threshold" in data:
                 global_ctl.cpu_thresh = int(data["cpu_threshold"])
+
+            if "gpu_threshold" in data:
+                global_ctl.gpu_thresh = int(data["gpu_threshold"])
             
             # 2. 현재 상태를 바로 응답 (옵션)
             response = {
@@ -77,4 +82,5 @@ async def main():
 if __name__ == "__main__":
 
     asyncio.run(main())
+
 
