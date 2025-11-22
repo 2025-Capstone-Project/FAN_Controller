@@ -110,8 +110,8 @@ class FanController:
         else:
             pwm = self._target_by_formula(cpu_temp, gpu_temp, 1) # auto로 전환
             
-        # PWM 값 클램프 (0~255 범위)
-        pwm = int(clamp(pwm, 0, 255))
+        # PWM 값 클램프 (0~100 범위)
+        pwm = int(clamp(pwm, 0, 100))
         
         return pwm
 
@@ -143,5 +143,6 @@ def send_to_pi(pwm_value: int):
 
 if __name__ == "__main__":
     print("이 파일은 라이브러리입니다. process_control_command.py를 실행하세요.")
+
 
 
