@@ -31,7 +31,7 @@ async def automation_loop():
             send_to_pi(pwm_value)
             
             # 로그 출력 (옵션)
-            # print(f"[Loop] Mode={global_ctl.mode}, PWM={pwm_value}, CPU={cpu}")
+            print(f"[Loop] Mode={global_ctl.mode}, PWM={pwm_value}, CPU={cpu}")
 
         except Exception as e:
             print(f"[Loop Error] {e}")
@@ -84,6 +84,7 @@ async def main():
 if __name__ == "__main__":
 
     asyncio.run(main())
+
 
 
 
