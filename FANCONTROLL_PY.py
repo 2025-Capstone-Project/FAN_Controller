@@ -53,7 +53,7 @@ class FanController:
     last_ts_ms: int = 0
     
     # 상태 관리 변수 추가 
-    mode: str = "auto"  # "auto", "manual"
+    mode: str = "auto"  # "auto", "manual", "range"
     manual_target: int = 0 # 수동 모드일 때 목표값 [Manual]
     
     # 임계값 저장 [Range]
@@ -148,6 +148,7 @@ def send_to_pi(pwm_value: int):
 
 if __name__ == "__main__":
     print("이 파일은 라이브러리입니다. process_control_command.py를 실행하세요.")
+
 
 
 
