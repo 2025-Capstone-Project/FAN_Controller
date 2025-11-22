@@ -103,7 +103,7 @@ async def automation_loop():
         # 4. 1초 대기 (다른 작업들에게 양보)
         await asyncio.sleep(1.0)
 
-async def handle_connection(websocket, path):
+async def handle_connection(websocket, path=None):
     """웹 클라이언트 연결 처리"""
     print(f"[Web] Client connected: {websocket.remote_address}")
     try:
@@ -148,6 +148,7 @@ async def main():
 if __name__ == "__main__":
 
     asyncio.run(main())
+
 
 
 
