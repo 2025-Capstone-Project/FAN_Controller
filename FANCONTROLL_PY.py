@@ -75,7 +75,12 @@ class FanController:
             target = clamp(self.manual_target, 0, 100)
 
         elif self.mode == "range":
-            target = self._calculate_pwm_range(cpu_temp, gpu_temp)
+            target = self._calculate_pwm_range(
+                cpu_temp,
+                gpu_temp,
+                self.cpu_thresh,
+                self.gpu_thresh,
+            )
 
         else:  # "auto"
             target = self._target_by_formula(cpu_temp, gpu_temp, model_result)
@@ -143,6 +148,7 @@ def send_to_pi(pwm_value: int):
 
 if __name__ == "__main__":
     print("이 파일은 라이브러리입니다. process_control_command.py를 실행하세요.")
+
 
 
 
