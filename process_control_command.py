@@ -3,28 +3,50 @@ import websockets
 import json
 from FANCONTROLL_PY import FanController, read_latest_values, send_to_pi
 
-# ★ 추가: websockets 의 HTTP 파서를 패치해서 Content-Length 헤더를 허용
 from websockets import http11
 
 class PatchedRequest(http11.Request):
     @classmethod
-    async def parse(cls, read_line):
-        # 1. 요청 라인 읽기
-        request_line = await read_line(http11.MAX_REQUEST_LINE)
-        method, raw_path, protocol = request_line.split(b" ", 2)
+    def parse(cls, read_line):
+        """
+        원래 http11.Request.parse() 구현에서
+        'Content-Length' 체크만 제거한 버전.
+        제너레이터 기반 코루틴이어야 하므로 async def 쓰면 안 됨.
+        """
+        # 요청 라인 파싱
+        request_line = yield from read_line(http11.MAX_REQUEST_LINE)
 
-        if protocol != b"HTTP/1.1":
-            raise ValueError(f"unsupported protocol; expected HTTP/1.1: {protocol!r}")
+        try:
+            method, raw_path, version = request_line.split(b" ", 2)
+        except ValueError:  # pragma: no cover
+            raise ValueError(f"invalid HTTP request line: {request_line!r}")
+
+        if version != b"HTTP/1.1":
+            raise ValueError(f"unsupported HTTP version: {version!r}")
+
         if method != b"GET":
-            raise ValueError(f"unsupported HTTP method; expected GET; got {method!r}")
+            raise ValueError(f"unsupported HTTP method: {method!r}")
 
         path = raw_path.decode("ascii", "surrogateescape")
 
-        # 2. 헤더 읽기
-        headers = await http11.parse_headers(read_line)
+        # 헤더 파싱
+        headers = yield from http11.parse_headers(read_line)
+
+        # 원래 코드:
+        #   if "Transfer-Encoding" in headers: ...
+        #   if "Content-Length" in headers: raise ValueError("unsupported request body")
+        #
+        # 우리는 'Transfer-Encoding'만 막고,
+        # 'Content-Length'는 허용해야 자바 HttpClient(WebSocket)의
+        # "Content-Length: 0" 헤더를 받아들일 수 있음.
+
+        if "Transfer-Encoding" in headers:
+            raise NotImplementedError("transfer codings aren't supported")
+
+        # Content-Length는 더 이상 체크하지 않음
         return cls(path, headers)
 
-# websockets 내부에서 사용하는 Request 클래스를 우리가 패치한 걸로 교체
+# 실제로 websockets 내부에서 사용하는 Request 클래스를 교체
 http11.Request = PatchedRequest
 
 from FANCONTROLL_PY import FanController, read_latest_values, send_to_pi
@@ -111,6 +133,7 @@ async def main():
 if __name__ == "__main__":
 
     asyncio.run(main())
+
 
 
 
