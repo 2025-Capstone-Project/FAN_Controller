@@ -8,6 +8,8 @@
 
 ## 시스템 아키텍처 (Architecture)
 
+![시스템 아키텍처](./System%20architecture.png)
+
 이 저장소는 크게 **제어 서버(Server)** 와 **엣지 디바이스(Edge Device)** 로 구성됩니다.
 
 *   **Server Side**: InfluxDB 데이터를 분석하고 최적의 PWM 값을 계산합니다. 웹소켓 서버를 통해 사용자 입력을 받습니다.
