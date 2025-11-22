@@ -3,6 +3,33 @@ import websockets
 import json
 from FANCONTROLL_PY import FanController, read_latest_values, send_to_pi
 
+# ★ 추가: websockets 의 HTTP 파서를 패치해서 Content-Length 헤더를 허용
+from websockets import http11
+
+class PatchedRequest(http11.Request):
+    @classmethod
+    async def parse(cls, read_line):
+        # 1. 요청 라인 읽기
+        request_line = await read_line(http11.MAX_REQUEST_LINE)
+        method, raw_path, protocol = request_line.split(b" ", 2)
+
+        if protocol != b"HTTP/1.1":
+            raise ValueError(f"unsupported protocol; expected HTTP/1.1: {protocol!r}")
+        if method != b"GET":
+            raise ValueError(f"unsupported HTTP method; expected GET; got {method!r}")
+
+        path = raw_path.decode("ascii", "surrogateescape")
+
+        # 2. 헤더 읽기
+        headers = await http11.parse_headers(read_line)
+        return cls(path, headers)
+
+# websockets 내부에서 사용하는 Request 클래스를 우리가 패치한 걸로 교체
+http11.Request = PatchedRequest
+
+from FANCONTROLL_PY import FanController, read_latest_values, send_to_pi
+
+
 global_ctl = FanController()
 
 async def automation_loop():
@@ -84,6 +111,7 @@ async def main():
 if __name__ == "__main__":
 
     asyncio.run(main())
+
 
 
 
