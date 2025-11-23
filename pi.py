@@ -94,7 +94,7 @@ def handle_control_client(conn, addr, fan_controller):
     finally:
         print(f"[제어 서버] 연결 종료: {addr}")
 
-# 소켓 서버 기다림
+# DB 서버 대기 후 전송
 def start_control_server(fan_controller):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
         server_socket.bind((CONTROL_SERVER_HOST, CONTROL_SERVER_PORT))
