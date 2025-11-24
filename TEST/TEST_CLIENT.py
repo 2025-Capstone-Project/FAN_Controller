@@ -1,6 +1,7 @@
 import socket 
 import json
 import random
+import time
 
 # 임의 전송 client 코드
 PI_HOST = '127.0.0.1'
@@ -17,5 +18,6 @@ def send_to_pi(pwm_value: int):
 def main():
     while True:
         send_to_pi(random.randint(0,100))
+        time.sleep(5)
 
 main()
