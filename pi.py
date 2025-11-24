@@ -34,7 +34,7 @@ if not SIMULATION_MODE:
     try:
         import pigpio
     except (ImportError, RuntimeError):
-        print("[오류] RPi.GPIO 라이브러리를 찾을 수 없습니다. 시뮬레이션 모드로 전환합니다.")
+        print("[오류] pigpio 라이브러리를 찾을 수 없습니다. 시뮬레이션 모드로 전환합니다.")
         SIMULATION_MODE = True
 
 # --- 전역 변수 및 동기화 ---
