@@ -20,16 +20,19 @@ DEVICE_ID = "raspberrypi-fan-01"
 
 # 제어 서버로부터 명령을 수신할 포트 [VPN]
 CONTROL_SERVER_HOST = '0.0.0.0' 
-CONTROL_SERVER_PORT = 6000       
+CONTROL_SERVER_PORT = 6000 
+
+# PI 기본 설정(21번핀, 25kHz)
+pi= None
+FAN_PIN = 21  # 임의의 GPIO PIN
+PWM_FREQUENCY = 25000 # 25kHz
 
 # --- 시뮬레이션 모드 설정 ---.
 SIMULATION_MODE = False
 
 if not SIMULATION_MODE:
     try:
-        import RPi.GPIO as GPIO
-        FAN_PIN = 18  # 임의의 GPIO PIN
-        PWM_FREQUENCY = 100 # PWM 주파수 (0~100)
+        import pigpio
     except (ImportError, RuntimeError):
         print("[오류] RPi.GPIO 라이브러리를 찾을 수 없습니다. 시뮬레이션 모드로 전환합니다.")
         SIMULATION_MODE = True
@@ -46,24 +49,33 @@ lock = threading.Lock()
 # --- 코드 본문 ---
 
 def setup_gpio():
-    GPIO.setwarnings(False)
-    GPIO.setmode(GPIO.BCM)
-    GPIO.setup(FAN_PIN, GPIO.OUT)
-    fan = GPIO.PWM(FAN_PIN, PWM_FREQUENCY)
-    fan.start(0)
+    global pi
+
+    pi=pigpio.pi()
+    if not pi.connected:
+        print("[INFO] sudo systemctl start pigpiod.")
+    pi.set_mode(FAN_PIN, pigpio.OUTPUT)
+    pi.set_PWM_frequency(FAN_PIN, PWM_FREQUENCY)
+    pi.set_PWM_dutycycle(FAN_PIN, 0)
+
+    actual_feq= pi.get_PWM_frequency(PWM_FREQUENCY)
     print(f"[GPIO] 핀 {FAN_PIN}을 PWM 모드로 설정했습니다.")
-    return fan
+    return pi
 
 def set_fan_speed(pwm_value, fan_controller):
-    global current_pwm_value # 전역변수 사용
+    global current_pwm_value, pi # 전역변수 사용
     
     pwm_value = max(0, min(100, pwm_value)) # 0~100
 
     with lock:
         current_pwm_value = pwm_value
     
-    if not SIMULATION_MODE and fan_controller:
-        fan_controller.ChangeDutyCycle(current_pwm_value)
+     if not SIMULATION_MODE and pi is not None:
+        duty_255 = int(255 * pwm_value / 100)  # 0~100 -> 0~255 매핑
+        try:
+            pi.set_PWM_dutycycle(FAN_PIN, duty_255)
+        except Exception as e:
+            print(f"[제어] PWM 설정 중 오류: {e}")
     
     print(f"[제어] 팬 PWM이 {current_pwm_value}%로 설정되었습니다.")
 
@@ -158,9 +170,14 @@ def main():
         print("\n[종료] 프로그램을 종료합니다.")
     finally:
         if not SIMULATION_MODE and fan_controller:
-            fan_controller.stop()
-            GPIO.cleanup()
-            print("[GPIO] GPIO 리소스를 정리했습니다.")
-
+            global pi
+            if not SIMULATION_MODE and pi is not None:
+                try:
+                    pi.set_PWM_dutycycle(FAN_PIN, 0)
+                except Exception:
+                    pass
+                pi.stop()
+                print("[GPIO] pigpio PWM 리소스를 정리했습니다.")
+                
 if __name__ == '__main__':
     main()
