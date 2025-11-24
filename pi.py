@@ -58,7 +58,6 @@ def setup_gpio():
     pi.set_PWM_frequency(FAN_PIN, PWM_FREQUENCY)
     pi.set_PWM_dutycycle(FAN_PIN, 0)
 
-    actual_feq= pi.get_PWM_frequency(PWM_FREQUENCY)
     print(f"[GPIO] 핀 {FAN_PIN}을 PWM 모드로 설정했습니다.")
     return pi
 
@@ -70,7 +69,7 @@ def set_fan_speed(pwm_value, fan_controller):
     with lock:
         current_pwm_value = pwm_value
     
-     if not SIMULATION_MODE and pi is not None:
+    if not SIMULATION_MODE and pi is not None:
         duty_255 = int(255 * pwm_value / 100)  # 0~100 -> 0~255 매핑
         try:
             pi.set_PWM_dutycycle(FAN_PIN, duty_255)
