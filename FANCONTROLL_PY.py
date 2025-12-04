@@ -64,7 +64,7 @@ class FanController:
         f_cpu = clamp(cpu_temp / 60.0, 0.0, 1.0)
         f_gpu = clamp(gpu_temp / 60.0, 0.0, 1.0)
         f_model = 1.0 if model_result > 0 else 0.0
-        pwm = 30.0 + (88.0 * max(f_cpu, f_gpu) * f_model)
+        pwm = 30.0 + (88.0 * max(f_cpu, f_gpu) * !f_model)
         return int(round(clamp(pwm, 0.0, 100.0)))
 
     # step 함수 단순화: 내부 상태(mode)를 보고 알아서 결정하도록 변경
@@ -148,6 +148,7 @@ def send_to_pi(pwm_value: int):
 
 if __name__ == "__main__":
     print("이 파일은 라이브러리입니다. process_control_command.py를 실행하세요.")
+
 
 
 
